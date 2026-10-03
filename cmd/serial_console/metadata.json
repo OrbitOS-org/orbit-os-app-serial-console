@@ -1,0 +1,12 @@
+{
+  "name": "Serial Console",
+  "version": "1.0.4",
+  "description": "Web UART console (PuTTY-like)",
+  "entry_point": "serial_console",
+  "permissions": [
+    "SystemService/*",
+    "UartService/*",
+    "AppHubService/*"
+  ],
+  "package_id": "org.orbit-os.tools.serial_console"
+}

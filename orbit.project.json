@@ -1,0 +1,7 @@
+{
+  "language": "go",
+  "name": "orbit-os-app-serial-console",
+  "appPath": "cmd/serial_console",
+  "certsDir": "cmd/certs/grpc",
+  "sdkVersion": "v26.0.3"
+}

@@ -1,0 +1,9 @@
+Orbit OS Serial Console
+Copyright 2026 Orbit OS
+
+This product includes software developed by Orbit OS
+for the Orbit OS platform (https://www.orbit-os.org/).
+
+This product uses Gorilla WebSocket (https://github.com/gorilla/websocket),
+Copyright (c) 2013 The Gorilla WebSocket Authors, licensed under the
+BSD 2-Clause License.

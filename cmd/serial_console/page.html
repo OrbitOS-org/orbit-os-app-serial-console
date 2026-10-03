@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Serial Console</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="console-page">
+  <div class="console-shell">
+  <header class="console-header">
+    <div class="console-header-top">
+      <div class="console-brand">
+        <img src="/orbit-logo.png" alt="Orbit OS" class="console-logo" width="180" height="40" decoding="async" />
+        <h1 class="console-title">Serial Console</h1>
+      </div>
+    </div>
+    <div class="form-toolbar">
+      <div class="field field-port">
+        <label for="portSelect">UART port</label>
+        <select id="portSelect" aria-label="Ports reported by the device">
+          <option value="">— Choose port —</option>
+        </select>
+        <div id="portCustomWrap" class="field-custom-wrap hidden">
+          <input type="text" id="port" value="" placeholder="e.g. ttyUSB0" autocomplete="off" aria-label="Custom port name" />
+        </div>
+      </div>
+      <div class="field field-baud field-narrow">
+        <label for="baudPreset">Baud</label>
+        <select id="baudPreset" aria-label="Common baud rates">
+          <option value="">— Common rates —</option>
+        </select>
+        <div id="baudCustomWrap" class="field-custom-wrap hidden">
+          <input type="text" id="baud" inputmode="numeric" pattern="[0-9]*" value="9600" placeholder="Any baud" autocomplete="off" aria-label="Custom baud rate" />
+        </div>
+      </div>
+      <div class="field field-databits field-narrow">
+        <label for="databits">Data</label>
+        <select id="databits">
+          <option value="5">5</option>
+          <option value="6">6</option>
+          <option value="7">7</option>
+          <option value="8" selected>8</option>
+        </select>
+      </div>
+      <div class="field field-parity field-narrow">
+        <label for="parity">Parity</label>
+        <select id="parity">
+          <option value="N" selected>N</option>
+          <option value="E">E</option>
+          <option value="O">O</option>
+        </select>
+      </div>
+      <div class="field field-stop field-narrow">
+        <label for="stop">Stop</label>
+        <select id="stop">
+          <option value="1" selected>1</option>
+          <option value="2">2</option>
+        </select>
+      </div>
+      <div class="field field-chunk field-narrow">
+        <label for="chunk">RX chunk</label>
+        <input type="number" id="chunk" value="4096" min="256" step="256" title="RX chunk (bytes)" />
+      </div>
+      <div class="field field-actions">
+        <span class="field-actions-label" aria-hidden="true">&nbsp;</span>
+        <div class="field-actions-btns">
+          <button type="button" id="btnPorts" class="btn-secondary btn-toolbar">List ports</button>
+          <button type="button" id="btnConnect" class="btn-primary btn-toolbar">Connect</button>
+          <span id="status">Ready.</span>
+        </div>
+      </div>
+    </div>
+    <p id="portsHint"></p>
+  </header>
+  <p class="hint" id="hintConsoleLine">Console closed</p>
+
+  <div id="term-wrap">
+    <textarea id="term" spellcheck="false" autocomplete="off" disabled></textarea>
+    <div class="term-tools" role="toolbar" aria-label="Terminal options">
+      <label for="enterLine">Enter sends</label>
+      <select id="enterLine" title="CR+LF on Linux often counts as two lines (two prompts per Enter). Prefer CR or LF.">
+        <option value="cr" selected>CR (serial / bash default)</option>
+        <option value="lf">LF</option>
+        <option value="crlf">CR+LF</option>
+      </select>
+      <label><input type="checkbox" id="localEcho" /> Local echo (show what you type; enable if the UART does not echo)</label>
+      <label title="UTF-8 shows replacement chars if bytes are not valid UTF-8. Latin-1 maps one byte to one character."><input type="checkbox" id="rxUtf8" /> RX as UTF-8 (otherwise Latin-1 / raw 8-bit)</label>
+    </div>
+  </div>
+  </div>
+
+  <script>
+    const portEl = document.getElementById('port');
+    const portSelectEl = document.getElementById('portSelect');
+    const baudEl = document.getElementById('baud');
+    const baudPresetEl = document.getElementById('baudPreset');
+    const portCustomWrap = document.getElementById('portCustomWrap');
+    const baudCustomWrap = document.getElementById('baudCustomWrap');
+
+    const STANDARD_BAUDS = [300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200, 230400, 460800, 500000, 576000, 921600, 1000000, 1500000, 2000000, 2500000, 3000000, 3500000, 4000000];
+    let lastPresetBaud = '115200';
+    const databitsEl = document.getElementById('databits');
+    const parityEl = document.getElementById('parity');
+    const stopEl = document.getElementById('stop');
+    const chunkEl = document.getElementById('chunk');
+    const btnPorts = document.getElementById('btnPorts');
+    const btnConnect = document.getElementById('btnConnect');
+    const statusEl = document.getElementById('status');
+    const portsHint = document.getElementById('portsHint');
+    const hintConsoleLine = document.getElementById('hintConsoleLine');
+    const term = document.getElementById('term');
+    const enterLine = document.getElementById('enterLine');
+
+    function enterLineBytes() {
+      switch (enterLine.value) {
+        case 'lf':
+          return '\n';
+        case 'crlf':
+          return '\r\n';
+        default:
+          return '\r';
+      }
+    }
+    const localEcho = document.getElementById('localEcho');
+    const rxUtf8 = document.getElementById('rxUtf8');
+
+    let ws = null;
+    /** Length of server-only prefix (user Backspace must not delete before this point). */
+    let rxEnd = 0;
+    /** Incomplete ESC/CSI tail when a frame splits mid-sequence (merged on next chunk). */
+    let uartRxEscPrefix = '';
+    const wsURL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
+
+    function appendRx(s) {
+      term.value += s;
+      rxEnd = term.value.length;
+      term.scrollTop = term.scrollHeight;
+      moveCaretEnd();
+    }
+
+    /**
+     * If the last ESC [ … in s has no final byte (0x40–0x7E), it is incomplete — defer to next RX chunk.
+     */
+    function peelIncompleteCSI(s) {
+      const esc = s.lastIndexOf('\x1b');
+      if (esc === -1) return { body: s, carry: '' };
+      const rest = s.slice(esc);
+      if (rest.length === 1) {
+        return { body: s.slice(0, esc), carry: '\x1b' };
+      }
+      if (rest.charAt(1) !== '[') {
+        return { body: s, carry: '' };
+      }
+      for (let j = 2; j < rest.length; j++) {
+        const c = rest.charCodeAt(j);
+        if (c >= 0x40 && c <= 0x7e) {
+          return { body: s, carry: '' };
+        }
+      }
+      return { body: s.slice(0, esc), carry: rest };
+    }
+
+    /**
+     * Shells (bash/readline) emit CSI, cursor save/restore (ESC 7/8), DCS, etc.
+     * Bracketed paste (?2004h/l) is stripped first so a generic CSI regex cannot eat the next printable char.
+     */
+    function stripTerminalEscapes(s) {
+      return s
+        .replace(/\x1b\[\?2004[hl]/g, '')
+        .replace(/\?2004[hl]/g, '')
+        .replace(/\[\?2004[hl]/g, '')
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+        .replace(/\x1bP[\s\S]*?\x1b\\/g, '')
+        .replace(/\x1b[\x40-\x5F]/g, '')
+        .replace(/\x1b7|\x1b8/g, '')
+        .replace(/\x1b\(.{1}/g, '')
+        .replace(/\x1b\).{1}/g, '')
+        .replace(/\x1b#./g, '');
+    }
+
+    /**
+     * Textareas are not terminals: \\r\\n may render as two breaks (\\r + \\n).
+     * Lone \\r is carriage return (redraw same line) — drop it to avoid blank lines between prompts.
+     */
+    function normalizeLineEndingsForTextarea(s) {
+      return s.replace(/\r\n/g, '\n').replace(/\r/g, '');
+    }
+
+    /**
+     * Readline on Tab completion sends \\x07 (bell), \\x08/\\x7f (erase char on line),
+     * and other C0 controls — apply backspace at end of buffer; ignore the rest.
+     */
+    function appendRxFromUart(s) {
+      s = uartRxEscPrefix + s;
+      uartRxEscPrefix = '';
+      const peeled = peelIncompleteCSI(s);
+      s = peeled.body;
+      uartRxEscPrefix = peeled.carry;
+      s = stripTerminalEscapes(s);
+      s = normalizeLineEndingsForTextarea(s);
+      for (let i = 0; i < s.length; i++) {
+        const code = s.charCodeAt(i);
+        if (code === 0x07) continue;
+        if (code === 0x08 || code === 0x7f) {
+          if (term.value.length > 0) {
+            term.value = term.value.slice(0, -1);
+            rxEnd = Math.min(rxEnd, term.value.length);
+          }
+          continue;
+        }
+        if (code === 0x00) continue;
+        if (code < 0x20 && code !== 0x09 && code !== 0x0a) continue;
+        term.value += s[i];
+      }
+      rxEnd = term.value.length;
+      term.scrollTop = term.scrollHeight;
+      moveCaretEnd();
+    }
+
+    function moveCaretEnd() {
+      const n = term.value.length;
+      term.selectionStart = term.selectionEnd = n;
+    }
+
+    /** UART RX: raw bytes — invalid UTF-8 becomes U+FFFD; default Latin-1 (one byte = one char). */
+    function decodeUartRx(u8) {
+      if (rxUtf8.checked) {
+        return new TextDecoder('utf-8', { fatal: false }).decode(u8);
+      }
+      return new TextDecoder('iso-8859-1').decode(u8);
+    }
+
+    function currentPort() {
+      const v = portSelectEl.value;
+      if (v && v !== '__other__') return v;
+      return portEl.value.trim() || 'ttyUSB0';
+    }
+
+    function currentBaud() {
+      const v = baudPresetEl.value;
+      if (v && v !== '__custom__') return parseInt(v, 10) || 115200;
+      return parseInt(baudEl.value, 10) || 115200;
+    }
+
+    function updateHintConsoleLine() {
+      if (!hintConsoleLine) return;
+      const p = currentPort();
+      const b = currentBaud();
+      if (!ws) {
+        hintConsoleLine.textContent = 'Console closed';
+        return;
+      }
+      switch (ws.readyState) {
+        case WebSocket.CONNECTING:
+          hintConsoleLine.textContent = 'Console connecting…';
+          break;
+        case WebSocket.OPEN:
+          hintConsoleLine.textContent = 'Console opened: ' + p + '@' + b;
+          break;
+        default:
+          hintConsoleLine.textContent = 'Console closed';
+      }
+    }
+
+    function uartConfigJSON() {
+      const p = currentPort();
+      portEl.value = p;
+      return JSON.stringify({
+        port: p,
+        baud: currentBaud(),
+        databits: parseInt(databitsEl.value, 10) || 8,
+        parity: parityEl.value,
+        stop: parseInt(stopEl.value, 10) || 1,
+        chunk: parseInt(chunkEl.value, 10) || 4096,
+        gravity: ''
+      });
+    }
+
+    function setConnected(on) {
+      btnConnect.textContent = on ? 'Disconnect' : 'Connect';
+      btnConnect.classList.remove('btn-primary', 'btn-secondary');
+      btnConnect.classList.add(on ? 'btn-secondary' : 'btn-primary');
+      btnConnect.disabled = false;
+      btnPorts.disabled = on;
+      portEl.disabled = on;
+      portSelectEl.disabled = on;
+      baudEl.disabled = on;
+      baudPresetEl.disabled = on;
+      databitsEl.disabled = on;
+      parityEl.disabled = on;
+      stopEl.disabled = on;
+      chunkEl.disabled = on;
+      term.disabled = !on;
+      enterLine.disabled = !on;
+      localEcho.disabled = !on;
+      rxUtf8.disabled = !on;
+      statusEl.textContent = on ? 'Connected' : 'Disconnected';
+      updateHintConsoleLine();
+    }
+
+    function disconnect() {
+      uartRxEscPrefix = '';
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      setConnected(false);
+    }
+
+    term.addEventListener('keydown', (e) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN || term.disabled) return;
+
+      moveCaretEnd();
+
+      /* VT100 CSI cursor keys — forwarded so readline/bash gets history (↑↓) and line edit (←→). */
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        ws.send('\x1b[A');
+        moveCaretEnd();
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        ws.send('\x1b[B');
+        moveCaretEnd();
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        ws.send('\x1b[C');
+        moveCaretEnd();
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        ws.send('\x1b[D');
+        moveCaretEnd();
+        return;
+      }
+      /* xterm-style function keys (nano, less, etc.). */
+      if (e.key === 'Home') {
+        e.preventDefault();
+        ws.send('\x1b[1~');
+        moveCaretEnd();
+        return;
+      }
+      if (e.key === 'End') {
+        e.preventDefault();
+        ws.send('\x1b[4~');
+        moveCaretEnd();
+        return;
+      }
+      if (e.key === 'PageUp') {
+        e.preventDefault();
+        ws.send('\x1b[5~');
+        moveCaretEnd();
+        return;
+      }
+      if (e.key === 'PageDown') {
+        e.preventDefault();
+        ws.send('\x1b[6~');
+        moveCaretEnd();
+        return;
+      }
+      if (e.key === 'Insert') {
+        e.preventDefault();
+        ws.send('\x1b[2~');
+        moveCaretEnd();
+        return;
+      }
+      if (e.key === 'Delete') {
+        e.preventDefault();
+        ws.send('\x1b[3~');
+        moveCaretEnd();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        ws.send('\x1b');
+        moveCaretEnd();
+        return;
+      }
+
+      if (e.key === 'Tab' && e.shiftKey) {
+        e.preventDefault();
+        ws.send('\x1b[Z');
+        moveCaretEnd();
+        return;
+      }
+
+      /* Ctrl+A–Z → 0x01–0x1A (nano ^K, ^Z suspend, ^X exit, etc.). */
+      if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) {
+        const k = e.key.toLowerCase();
+        if (k >= 'a' && k <= 'z') {
+          e.preventDefault();
+          ws.send(String.fromCharCode(k.charCodeAt(0) - 96));
+          if (localEcho.checked) term.value += '^' + k.toUpperCase();
+          moveCaretEnd();
+          return;
+        }
+      }
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (e.repeat) return;
+        const nl = enterLineBytes();
+        ws.send(nl);
+        if (localEcho.checked) {
+          term.value += '\n';
+        }
+        moveCaretEnd();
+        return;
+      }
+
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        ws.send('\x7f');
+        if (localEcho.checked && term.value.length > rxEnd) {
+          term.value = term.value.slice(0, -1);
+        }
+        moveCaretEnd();
+        return;
+      }
+
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        ws.send('\t');
+        if (localEcho.checked) term.value += '\t';
+        moveCaretEnd();
+        return;
+      }
+
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        ws.send(e.key);
+        if (localEcho.checked) term.value += e.key;
+        moveCaretEnd();
+      }
+    });
+
+    term.addEventListener('paste', (e) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN || term.disabled) return;
+      e.preventDefault();
+      const t = e.clipboardData.getData('text');
+      ws.send(t);
+      if (localEcho.checked) term.value += t;
+      moveCaretEnd();
+    });
+
+    term.addEventListener('click', () => moveCaretEnd());
+
+    function syncPortCustomVisibility() {
+      const hasPortsFromApi = portSelectEl.options.length >= 3;
+      const pickOther = portSelectEl.value === '__other__';
+      const showCustom = !hasPortsFromApi || pickOther;
+      portCustomWrap.classList.toggle('hidden', !showCustom);
+      if (!showCustom && portSelectEl.value && portSelectEl.value !== '__other__') {
+        portEl.value = portSelectEl.value;
+      }
+      updateHintConsoleLine();
+    }
+
+    function syncBaudCustomVisibility() {
+      const show = baudPresetEl.value === '__custom__';
+      baudCustomWrap.classList.toggle('hidden', !show);
+      updateHintConsoleLine();
+    }
+
+    function fillPortSelect(ports) {
+      const sel = portSelectEl;
+      while (sel.options.length > 1) sel.remove(1);
+      const seen = new Set();
+      if (ports && ports.length) {
+        for (const p of ports) {
+          if (!p || seen.has(p)) continue;
+          seen.add(p);
+          const opt = document.createElement('option');
+          opt.value = p;
+          opt.textContent = p;
+          sel.appendChild(opt);
+        }
+      }
+      const other = document.createElement('option');
+      other.value = '__other__';
+      other.textContent = 'Other (type below)…';
+      sel.appendChild(other);
+      if (!ports || !ports.length) {
+        portSelectEl.value = '__other__';
+      }
+      syncPortSelectFromInput();
+    }
+
+    function syncPortSelectFromInput() {
+      const cur = portEl.value.trim();
+      if (!cur) {
+        if (portSelectEl.value !== '__other__') portSelectEl.value = '';
+        syncPortCustomVisibility();
+        return;
+      }
+      const match = [...portSelectEl.options].find(o => o.value === cur);
+      if (match) portSelectEl.value = cur;
+      else portSelectEl.value = '__other__';
+      syncPortCustomVisibility();
+    }
+
+    portSelectEl.addEventListener('change', () => {
+      const v = portSelectEl.value;
+      if (v && v !== '__other__') portEl.value = v;
+      syncPortCustomVisibility();
+    });
+    portEl.addEventListener('input', () => syncPortSelectFromInput());
+    portEl.addEventListener('change', () => syncPortSelectFromInput());
+
+    function fillBaudPreset() {
+      while (baudPresetEl.options.length > 1) baudPresetEl.remove(1);
+      for (const b of STANDARD_BAUDS) {
+        const opt = document.createElement('option');
+        opt.value = String(b);
+        opt.textContent = String(b);
+        baudPresetEl.appendChild(opt);
+      }
+      const o = document.createElement('option');
+      o.value = '__custom__';
+      o.textContent = 'Custom…';
+      baudPresetEl.appendChild(o);
+      syncBaudPresetFromInput();
+      lastPresetBaud =
+        baudPresetEl.value && baudPresetEl.value !== '__custom__'
+          ? baudPresetEl.value
+          : String(parseInt(baudEl.value, 10) || 115200);
+    }
+
+    function syncBaudPresetFromInput() {
+      const raw = baudEl.value.trim();
+      if (!raw) {
+        baudPresetEl.value = '';
+        syncBaudCustomVisibility();
+        return;
+      }
+      const n = parseInt(raw, 10);
+      if (isNaN(n)) {
+        baudPresetEl.value = '__custom__';
+        syncBaudCustomVisibility();
+        return;
+      }
+      const s = String(n);
+      const match = [...baudPresetEl.options].find(o => o.value === s);
+      if (match && match.value !== '__custom__') {
+        baudPresetEl.value = s;
+        lastPresetBaud = s;
+      } else {
+        baudPresetEl.value = '__custom__';
+      }
+      syncBaudCustomVisibility();
+    }
+
+    baudPresetEl.addEventListener('change', () => {
+      const v = baudPresetEl.value;
+      if (v && v !== '__custom__') {
+        baudEl.value = v;
+        lastPresetBaud = v;
+      } else if (v === '__custom__') {
+        baudEl.value = lastPresetBaud;
+      }
+      syncBaudCustomVisibility();
+    });
+    baudEl.addEventListener('input', () => syncBaudPresetFromInput());
+    baudEl.addEventListener('change', () => syncBaudPresetFromInput());
+
+    async function refreshPorts(showLoading) {
+      if (location.protocol === 'file:') return;
+      portsHint.textContent = showLoading ? 'Requesting…' : 'Loading ports…';
+      const url = '/api/ports';
+      try {
+        const r = await fetch(url);
+        const j = await r.json();
+        if (!r.ok) {
+          portsHint.textContent = 'Error: ' + (j.error || r.status);
+          fillPortSelect([]);
+          return;
+        }
+        const list = Array.isArray(j.ports) ? j.ports : [];
+        fillPortSelect(list);
+        portsHint.textContent = 'Ports (' + list.length + '): ' + (list.length ? list.join(', ') : '(none)');
+        if (list.length === 1) {
+          portEl.value = list[0];
+          syncPortSelectFromInput();
+        }
+      } catch (e) {
+        portsHint.textContent = String(e.message || e);
+        fillPortSelect([]);
+      }
+    }
+
+    btnPorts.addEventListener('click', () => refreshPorts(true));
+
+    fillBaudPreset();
+    fillPortSelect([]);
+    if (location.protocol !== 'file:') {
+      refreshPorts(false);
+    }
+
+    btnConnect.addEventListener('click', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        disconnect();
+        return;
+      }
+      if (ws && ws.readyState === WebSocket.CONNECTING) {
+        return;
+      }
+      if (location.protocol === 'file:') {
+        term.value = 'Open via http://127.0.0.1:9002 (Go server).\n';
+        return;
+      }
+      term.value = '';
+      rxEnd = 0;
+      uartRxEscPrefix = '';
+      statusEl.textContent = 'Connecting…';
+      btnConnect.textContent = 'Connecting…';
+      btnConnect.disabled = true;
+      ws = new WebSocket(wsURL);
+      ws.binaryType = 'arraybuffer';
+      updateHintConsoleLine();
+      ws.onopen = () => {
+        ws.send(uartConfigJSON());
+        setConnected(true);
+        statusEl.textContent = 'Connected';
+        term.focus();
+      };
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === 'string') {
+          appendRxFromUart(ev.data);
+          return;
+        }
+        const u8 = new Uint8Array(ev.data);
+        appendRxFromUart(decodeUartRx(u8));
+      };
+      ws.onclose = (ev) => {
+        ws = null;
+        setConnected(false);
+        statusEl.textContent = 'Disconnected';
+      };
+      ws.onerror = () => {
+        statusEl.textContent = 'WebSocket error';
+        appendRx('\n[WebSocket error]\n');
+        btnConnect.disabled = false;
+        btnConnect.textContent = 'Connect';
+        btnConnect.classList.remove('btn-secondary');
+        btnConnect.classList.add('btn-primary');
+        updateHintConsoleLine();
+      };
+    });
+  </script>
+</body>
+</html>
