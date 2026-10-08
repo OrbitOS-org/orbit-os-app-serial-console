@@ -6,15 +6,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	_ "embed"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -38,11 +43,16 @@ var pageHTML []byte
 //go:embed style.css
 var styleCSS []byte
 
-//go:embed orbit-logo.png
-var orbitLogoPNG []byte
+//go:embed orbit-logo.svg
+var orbitLogoSVG []byte
 
 //go:embed favicon.svg
 var iconSVG []byte
+
+// The terminal emulator (xterm.js and its add-ons), served to the page as it is.
+//
+//go:embed static/xterm
+var staticFiles embed.FS
 
 var appManifest = metadata.MustParseAppManifestJSON(identityJSON)
 
@@ -66,25 +76,32 @@ const (
 // on the device the SDK connects through the local Unix socket. Set with -host.
 var gravityHost = "192.168.1.100"
 
+// pageToken is a random value made at start and written into the page. The
+// page sends it back when it opens the WebSocket.
+var pageToken = newPageToken()
+
+func newPageToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // no random source: nothing safe to do
+	}
+	return hex.EncodeToString(b)
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin:     sameOrigin,
+	CheckOrigin:     fromOwnPage,
 }
 
-// sameOrigin accepts a WebSocket only from a page served by this app: the
-// Origin header must name the host the request was sent to. It stops a page of
-// another site, open in the same browser, from driving the serial port.
-func sameOrigin(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true // not a browser
-	}
-	u, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(u.Host, r.Host) || strings.EqualFold(u.Host, r.Header.Get("X-Forwarded-Host"))
+// fromOwnPage accepts a WebSocket only from the page served by this app: the
+// request must carry the token written into that page. A page of another site,
+// open in the same browser, cannot read the token, so it cannot drive the
+// serial port. The Origin header cannot be used for this: behind the Launcher
+// the app does not see the address the browser used.
+func fromOwnPage(r *http.Request) bool {
+	token := r.URL.Query().Get("t")
+	return subtle.ConstantTimeCompare([]byte(token), []byte(pageToken)) == 1
 }
 
 var (
@@ -112,8 +129,37 @@ func main() {
 	}
 }
 
+// stampedPage returns the page with the WebSocket token and with a mark of
+// this build in the address of every file it loads. Browsers keep those files for a while; with the mark,
+// a new version of the app is never shown with the files of the previous one.
+func stampedPage() ([]byte, error) {
+	h := sha256.New()
+	h.Write(pageHTML)
+	h.Write(styleCSS)
+	h.Write(orbitLogoSVG)
+	err := fs.WalkDir(staticFiles, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := staticFiles.ReadFile(path)
+		h.Write(data)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	build := hex.EncodeToString(h.Sum(nil))[:10]
+	page := bytes.ReplaceAll(pageHTML, []byte("__BUILD__"), []byte(build))
+	return bytes.ReplaceAll(page, []byte("__TOKEN__"), []byte(pageToken)), nil
+}
+
 func run(ctx context.Context) error {
 	mux := http.NewServeMux()
+
+	page, err := stampedPage()
+	if err != nil {
+		return fmt.Errorf("embedded files: %w", err)
+	}
 
 	serveIcon := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
@@ -133,14 +179,24 @@ func run(ctx context.Context) error {
 		_, _ = w.Write(styleCSS)
 	})
 
-	mux.HandleFunc("/orbit-logo.png", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/orbit-logo.svg", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
 		w.Header().Set("Cache-Control", "public, max-age=3600")
-		_, _ = w.Write(orbitLogoPNG)
+		_, _ = w.Write(orbitLogoSVG)
+	})
+
+	xterm, err := fs.Sub(staticFiles, "static/xterm")
+	if err != nil {
+		return fmt.Errorf("embedded files: %w", err)
+	}
+	xtermFiles := http.StripPrefix("/xterm/", http.FileServer(http.FS(xterm)))
+	mux.HandleFunc("/xterm/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		xtermFiles.ServeHTTP(w, r)
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +205,8 @@ func run(ctx context.Context) error {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(pageHTML)
+		w.Header().Set("Cache-Control", "no-cache") // the page itself is always asked for again
+		_, _ = w.Write(page)
 	})
 
 	mux.HandleFunc("/api/ports", func(w http.ResponseWriter, r *http.Request) {

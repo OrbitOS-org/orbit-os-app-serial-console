@@ -7,3 +7,9 @@ for the Orbit OS platform (https://www.orbit-os.org/).
 This product uses Gorilla WebSocket (https://github.com/gorilla/websocket),
 Copyright (c) 2013 The Gorilla WebSocket Authors, licensed under the
 BSD 2-Clause License.
+
+This product includes xterm.js and its fit and WebGL add-ons (https://xtermjs.org/),
+Copyright (c) 2017-2019, The xterm.js authors, Copyright (c) 2014-2016,
+SourceLair Private Company, Copyright (c) 2012-2013, Christopher Jeffrey,
+licensed under the MIT License. The files are in
+cmd/serial_console/static/xterm/, unmodified, with their licence.

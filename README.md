@@ -18,12 +18,17 @@ Runs on Raspberry Pi, Arduino UNO Q and other ARM64 devices with Orbit OS (free 
 
 ## Features
 
-- **Pick the port from a list** — the app asks the device for its UART ports (`ttyS0`, `ttyUSB0`, …)
-- **Connection settings** — baud rate (common presets or custom), data bits 5–8, parity N/E/O, stop bits 1/2
-- **Real-time terminal** over WebSocket, with full keyboard support
+- **Pick the port from a list** — the app asks the device for its UART ports (`ttyS0`, `ttyUSB0`, …); you can also type a name
+- **Connection settings** — baud rate (common values or custom), data bits 5–8, parity N/E/O, stop bits 1/2; remembered for the next visit
+- **A real terminal emulator** ([xterm.js](https://xtermjs.org/)) — colours, cursor movement and full-screen programs such as `nano`, `vi`, `top` or `menuconfig` display as in a desktop terminal; boxes and logos made of characters line up
+- **Full keyboard** — arrows, function keys, Tab, Ctrl+C and the other control keys; copy with Ctrl+C when text is selected (or Ctrl+Shift+C), paste with Ctrl+V
+- **Scrollback** of 10 000 lines; scroll up to read while data keeps arriving
+- **Send size** — a serial line does not carry the window size, so this button types `stty cols … rows …` into the shell for you
 - **Enter key mode** — CR, LF or CR+LF
-- **Local echo** for devices that don't echo what you type
-- **UTF-8 or Latin-1 / raw 8-bit** display of received bytes
+- **Local echo** for equipment that does not echo what you type
+- **UTF-8 or Latin-1 / raw 8-bit**, for both received and sent text
+- **Byte counters**, **Clear** and **Save log** (the terminal text as a file)
+- Works on a phone: while connected, the settings fold away and the terminal takes the screen
 - One session at a time, so two browser tabs never fight over the same port
 
 ## Install
@@ -49,7 +54,7 @@ You need [VS Code](https://code.visualstudio.com/) with the Orbit Studio extensi
 ## Getting started
 
 1. Open the device portal at `http://<DEVICE_IP>`, sign in, and open **Serial Console** from the Launcher.
-2. Press **List ports**, choose the UART port and the baud rate of the equipment.
+2. Choose the UART port and the baud rate of the equipment. Use the refresh button if you plugged in an adapter after opening the page.
 3. Press **Connect** and type — received data appears as it arrives.
 
 ## Development (Orbit Studio)
@@ -59,6 +64,7 @@ This project follows the standard [Orbit Studio](https://marketplace.visualstudi
 | Path | What |
 |---|---|
 | `cmd/serial_console/` | app source — `main.go` (HTTP + WebSocket server, UART bridge), `page.html` and `style.css` (web UI), `metadata.json` (manifest & permissions) |
+| `cmd/serial_console/static/xterm/` | xterm.js 6.0.0 with its fit (0.11.0) and WebGL (0.19.0) add-ons, unmodified, built into the binary — the page loads nothing from the internet |
 | `cmd/serial_console/orb/icon.svg` | launcher / Store icon |
 | `orbit.project.json` | Orbit Studio project settings |
 
@@ -71,13 +77,14 @@ This project follows the standard [Orbit Studio](https://marketplace.visualstudi
 
 - The web page and the WebSocket listen on `127.0.0.1` only and are reached through the Orbit OS Launcher, at `http://<DEVICE_IP>/console`, behind the device login. They are not reachable directly from the network.
 - The app takes a port in the reserved range 50000–60000 (starting at 50002) and moves to the next one when a port is taken.
-- The WebSocket only accepts connections from the app's own page.
+- The WebSocket only accepts connections from the app's own page: the page carries a random token, new each time the app starts, and sends it when it connects.
 - A serial console often gives a shell on the connected equipment — treat access to this app like access to that equipment.
 - Permissions used: `UartService`, `AppHubService`, `SystemService`.
 
 ## Acknowledgments
 
-WebSocket support uses [gorilla/websocket](https://github.com/gorilla/websocket) (BSD-2-Clause).
+- The terminal is [xterm.js](https://github.com/xtermjs/xterm.js) with its fit and WebGL add-ons (MIT) — the same emulator used by VS Code.
+- WebSocket support uses [gorilla/websocket](https://github.com/gorilla/websocket) (BSD-2-Clause).
 
 ## Links
 

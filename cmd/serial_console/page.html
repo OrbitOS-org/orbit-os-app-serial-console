@@ -5,654 +5,490 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Serial Console</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/xterm/xterm.css?v=__BUILD__" />
+  <link rel="stylesheet" href="/style.css?v=__BUILD__" />
 </head>
-<body class="console-page">
-  <div class="console-shell">
-  <header class="console-header">
-    <div class="console-header-top">
-      <div class="console-brand">
-        <img src="/orbit-logo.png" alt="Orbit OS" class="console-logo" width="180" height="40" decoding="async" />
-        <h1 class="console-title">Serial Console</h1>
+<body>
+  <div class="shell">
+
+    <header class="header">
+      <div class="brand">
+        <img src="/orbit-logo.svg?v=__BUILD__" alt="Orbit OS" width="143" height="48" />
+        <h1>Serial Console</h1>
       </div>
-    </div>
-    <div class="form-toolbar">
+      <div id="state" class="state" role="status" aria-live="polite">
+        <span class="dot"></span><span id="stateText">Disconnected</span>
+      </div>
+    </header>
+
+    <section class="settings" aria-label="Connection settings">
       <div class="field field-port">
-        <label for="portSelect">UART port</label>
-        <select id="portSelect" aria-label="Ports reported by the device">
-          <option value="">— Choose port —</option>
-        </select>
-        <div id="portCustomWrap" class="field-custom-wrap hidden">
-          <input type="text" id="port" value="" placeholder="e.g. ttyUSB0" autocomplete="off" aria-label="Custom port name" />
+        <label for="portSelect">Port</label>
+        <div class="row">
+          <select id="portSelect"></select>
+          <button type="button" id="btnPorts" class="icon" title="Refresh the list of ports" aria-label="Refresh the list of ports">&#8635;</button>
         </div>
+        <input type="text" id="portCustom" class="hidden" placeholder="Port name, e.g. ttyUSB0" autocomplete="off" aria-label="Port name" />
       </div>
-      <div class="field field-baud field-narrow">
-        <label for="baudPreset">Baud</label>
-        <select id="baudPreset" aria-label="Common baud rates">
-          <option value="">— Common rates —</option>
-        </select>
-        <div id="baudCustomWrap" class="field-custom-wrap hidden">
-          <input type="text" id="baud" inputmode="numeric" pattern="[0-9]*" value="9600" placeholder="Any baud" autocomplete="off" aria-label="Custom baud rate" />
-        </div>
-      </div>
-      <div class="field field-databits field-narrow">
-        <label for="databits">Data</label>
-        <select id="databits">
-          <option value="5">5</option>
-          <option value="6">6</option>
-          <option value="7">7</option>
-          <option value="8" selected>8</option>
-        </select>
-      </div>
-      <div class="field field-parity field-narrow">
-        <label for="parity">Parity</label>
-        <select id="parity">
-          <option value="N" selected>N</option>
-          <option value="E">E</option>
-          <option value="O">O</option>
-        </select>
-      </div>
-      <div class="field field-stop field-narrow">
-        <label for="stop">Stop</label>
-        <select id="stop">
-          <option value="1" selected>1</option>
-          <option value="2">2</option>
-        </select>
-      </div>
-      <div class="field field-chunk field-narrow">
-        <label for="chunk">RX chunk</label>
-        <input type="number" id="chunk" value="4096" min="256" step="256" title="RX chunk (bytes)" />
-      </div>
-      <div class="field field-actions">
-        <span class="field-actions-label" aria-hidden="true">&nbsp;</span>
-        <div class="field-actions-btns">
-          <button type="button" id="btnPorts" class="btn-secondary btn-toolbar">List ports</button>
-          <button type="button" id="btnConnect" class="btn-primary btn-toolbar">Connect</button>
-          <span id="status">Ready.</span>
-        </div>
-      </div>
-    </div>
-    <p id="portsHint"></p>
-  </header>
-  <p class="hint" id="hintConsoleLine">Console closed</p>
 
-  <div id="term-wrap">
-    <textarea id="term" spellcheck="false" autocomplete="off" disabled></textarea>
-    <div class="term-tools" role="toolbar" aria-label="Terminal options">
-      <label for="enterLine">Enter sends</label>
-      <select id="enterLine" title="CR+LF on Linux often counts as two lines (two prompts per Enter). Prefer CR or LF.">
-        <option value="cr" selected>CR (serial / bash default)</option>
-        <option value="lf">LF</option>
-        <option value="crlf">CR+LF</option>
-      </select>
-      <label><input type="checkbox" id="localEcho" /> Local echo (show what you type; enable if the UART does not echo)</label>
-      <label title="UTF-8 shows replacement chars if bytes are not valid UTF-8. Latin-1 maps one byte to one character."><input type="checkbox" id="rxUtf8" /> RX as UTF-8 (otherwise Latin-1 / raw 8-bit)</label>
-    </div>
-  </div>
+      <div class="field field-baud">
+        <label for="baudSelect">Baud rate</label>
+        <select id="baudSelect"></select>
+        <input type="text" id="baudCustom" class="hidden" inputmode="numeric" placeholder="Baud rate" autocomplete="off" aria-label="Custom baud rate" />
+      </div>
+
+      <div class="field">
+        <span class="label">Data · Parity · Stop</span>
+        <div class="row">
+          <select id="databits" class="frame" aria-label="Data bits">
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8" selected>8</option>
+          </select>
+          <select id="parity" class="frame" aria-label="Parity">
+            <option value="N" selected>N</option>
+            <option value="E">E</option>
+            <option value="O">O</option>
+          </select>
+          <select id="stop" class="frame" aria-label="Stop bits">
+            <option value="1" selected>1</option>
+            <option value="2">2</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field field-connect">
+        <span class="label">&nbsp;</span>
+        <button type="button" id="btnConnect" class="primary">Connect</button>
+      </div>
+
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div class="field">
+          <label for="chunk" title="Largest block of received bytes delivered at once">Receive block (bytes)</label>
+          <input type="number" id="chunk" value="4096" min="256" step="256" />
+        </div>
+      </details>
+
+      <p id="note" class="note"></p>
+    </section>
+
+    <section class="console" aria-label="Terminal">
+      <div id="term" class="screen"></div>
+
+      <div class="toolbar" role="toolbar" aria-label="Terminal options">
+        <label title="What the Enter key sends">Enter sends
+          <select id="enterMode">
+            <option value="cr" selected>CR</option>
+            <option value="lf">LF</option>
+            <option value="crlf">CR+LF</option>
+          </select>
+        </label>
+        <label title="How bytes are turned into text, in both directions">Text as
+          <select id="encoding">
+            <option value="utf8" selected>UTF-8</option>
+            <option value="latin1">Latin-1 (raw bytes)</option>
+          </select>
+        </label>
+        <label title="Show what you type; turn it on when the equipment does not echo">
+          <input type="checkbox" id="localEcho" /> Local echo
+        </label>
+        <span class="spacer"></span>
+        <span class="counters" id="counters" title="Bytes received and sent in this session">RX 0 · TX 0</span>
+        <span class="counters" id="size" title="Columns × rows of the terminal"></span>
+        <button type="button" id="btnSize" title="A serial line does not carry the window size. This types “stty cols … rows …” into the shell, so that full-screen programs use the whole terminal." disabled>Send size</button>
+        <button type="button" id="btnClear" title="Empty the terminal">Clear</button>
+        <button type="button" id="btnSave" title="Save the terminal text to a file">Save log</button>
+      </div>
+    </section>
+
   </div>
 
+  <script src="/xterm/xterm.js?v=__BUILD__"></script>
+  <script src="/xterm/addon-fit.js?v=__BUILD__"></script>
+  <script src="/xterm/addon-webgl.js?v=__BUILD__"></script>
   <script>
-    const portEl = document.getElementById('port');
-    const portSelectEl = document.getElementById('portSelect');
-    const baudEl = document.getElementById('baud');
-    const baudPresetEl = document.getElementById('baudPreset');
-    const portCustomWrap = document.getElementById('portCustomWrap');
-    const baudCustomWrap = document.getElementById('baudCustomWrap');
+    'use strict';
 
-    const STANDARD_BAUDS = [300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200, 230400, 460800, 500000, 576000, 921600, 1000000, 1500000, 2000000, 2500000, 3000000, 3500000, 4000000];
-    let lastPresetBaud = '115200';
-    const databitsEl = document.getElementById('databits');
-    const parityEl = document.getElementById('parity');
-    const stopEl = document.getElementById('stop');
-    const chunkEl = document.getElementById('chunk');
-    const btnPorts = document.getElementById('btnPorts');
-    const btnConnect = document.getElementById('btnConnect');
-    const statusEl = document.getElementById('status');
-    const portsHint = document.getElementById('portsHint');
-    const hintConsoleLine = document.getElementById('hintConsoleLine');
-    const term = document.getElementById('term');
-    const enterLine = document.getElementById('enterLine');
+    const $ = (id) => document.getElementById(id);
+    const portSelect = $('portSelect'), portCustom = $('portCustom'), btnPorts = $('btnPorts');
+    const baudSelect = $('baudSelect'), baudCustom = $('baudCustom');
+    const databits = $('databits'), parity = $('parity'), stop = $('stop'), chunk = $('chunk');
+    const btnConnect = $('btnConnect'), note = $('note');
+    const stateEl = $('state'), stateText = $('stateText');
+    const settingsEl = document.querySelector('.settings');
+    const screenEl = $('term');
+    const enterMode = $('enterMode'), encoding = $('encoding'), localEcho = $('localEcho');
+    const counters = $('counters'), sizeEl = $('size');
+    const btnSize = $('btnSize'), btnClear = $('btnClear'), btnSave = $('btnSave');
 
-    function enterLineBytes() {
-      switch (enterLine.value) {
-        case 'lf':
-          return '\n';
-        case 'crlf':
-          return '\r\n';
-        default:
-          return '\r';
-      }
-    }
-    const localEcho = document.getElementById('localEcho');
-    const rxUtf8 = document.getElementById('rxUtf8');
+    const OTHER = '__other__';
+    const BAUDS = [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1000000, 1500000, 2000000, 3000000, 4000000];
+    const DEFAULT_BAUD = 9600;
+    const SCROLLBACK_LINES = 10000;
+    const SETTINGS_KEY = 'serial-console.settings';
+    const wsURL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws?t=__TOKEN__';
 
     let ws = null;
-    /** Length of server-only prefix (user Backspace must not delete before this point). */
-    let rxEnd = 0;
-    /** Incomplete ESC/CSI tail when a frame splits mid-sequence (merged on next chunk). */
-    let uartRxEscPrefix = '';
-    const wsURL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
 
-    function appendRx(s) {
-      term.value += s;
-      rxEnd = term.value.length;
-      term.scrollTop = term.scrollHeight;
-      moveCaretEnd();
+    // ---------------------------------------------------------------- settings
+
+    function loadSettings() {
+      try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; }
     }
 
-    /**
-     * If the last ESC [ … in s has no final byte (0x40–0x7E), it is incomplete — defer to next RX chunk.
-     */
-    function peelIncompleteCSI(s) {
-      const esc = s.lastIndexOf('\x1b');
-      if (esc === -1) return { body: s, carry: '' };
-      const rest = s.slice(esc);
-      if (rest.length === 1) {
-        return { body: s.slice(0, esc), carry: '\x1b' };
-      }
-      if (rest.charAt(1) !== '[') {
-        return { body: s, carry: '' };
-      }
-      for (let j = 2; j < rest.length; j++) {
-        const c = rest.charCodeAt(j);
-        if (c >= 0x40 && c <= 0x7e) {
-          return { body: s, carry: '' };
-        }
-      }
-      return { body: s.slice(0, esc), carry: rest };
+    function saveSettings() {
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+          port: currentPort(), baud: currentBaud(), databits: databits.value, parity: parity.value,
+          stop: stop.value, chunk: chunk.value, enter: enterMode.value, encoding: encoding.value,
+          echo: localEcho.checked
+        }));
+      } catch (e) { /* storage not available: settings are simply not remembered */ }
     }
 
-    /**
-     * Shells (bash/readline) emit CSI, cursor save/restore (ESC 7/8), DCS, etc.
-     * Bracketed paste (?2004h/l) is stripped first so a generic CSI regex cannot eat the next printable char.
-     */
-    function stripTerminalEscapes(s) {
-      return s
-        .replace(/\x1b\[\?2004[hl]/g, '')
-        .replace(/\?2004[hl]/g, '')
-        .replace(/\[\?2004[hl]/g, '')
-        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-        .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-        .replace(/\x1bP[\s\S]*?\x1b\\/g, '')
-        .replace(/\x1b[\x40-\x5F]/g, '')
-        .replace(/\x1b7|\x1b8/g, '')
-        .replace(/\x1b\(.{1}/g, '')
-        .replace(/\x1b\).{1}/g, '')
-        .replace(/\x1b#./g, '');
-    }
-
-    /**
-     * Textareas are not terminals: \\r\\n may render as two breaks (\\r + \\n).
-     * Lone \\r is carriage return (redraw same line) — drop it to avoid blank lines between prompts.
-     */
-    function normalizeLineEndingsForTextarea(s) {
-      return s.replace(/\r\n/g, '\n').replace(/\r/g, '');
-    }
-
-    /**
-     * Readline on Tab completion sends \\x07 (bell), \\x08/\\x7f (erase char on line),
-     * and other C0 controls — apply backspace at end of buffer; ignore the rest.
-     */
-    function appendRxFromUart(s) {
-      s = uartRxEscPrefix + s;
-      uartRxEscPrefix = '';
-      const peeled = peelIncompleteCSI(s);
-      s = peeled.body;
-      uartRxEscPrefix = peeled.carry;
-      s = stripTerminalEscapes(s);
-      s = normalizeLineEndingsForTextarea(s);
-      for (let i = 0; i < s.length; i++) {
-        const code = s.charCodeAt(i);
-        if (code === 0x07) continue;
-        if (code === 0x08 || code === 0x7f) {
-          if (term.value.length > 0) {
-            term.value = term.value.slice(0, -1);
-            rxEnd = Math.min(rxEnd, term.value.length);
-          }
-          continue;
-        }
-        if (code === 0x00) continue;
-        if (code < 0x20 && code !== 0x09 && code !== 0x0a) continue;
-        term.value += s[i];
-      }
-      rxEnd = term.value.length;
-      term.scrollTop = term.scrollHeight;
-      moveCaretEnd();
-    }
-
-    function moveCaretEnd() {
-      const n = term.value.length;
-      term.selectionStart = term.selectionEnd = n;
-    }
-
-    /** UART RX: raw bytes — invalid UTF-8 becomes U+FFFD; default Latin-1 (one byte = one char). */
-    function decodeUartRx(u8) {
-      if (rxUtf8.checked) {
-        return new TextDecoder('utf-8', { fatal: false }).decode(u8);
-      }
-      return new TextDecoder('iso-8859-1').decode(u8);
-    }
+    const saved = loadSettings();
 
     function currentPort() {
-      const v = portSelectEl.value;
-      if (v && v !== '__other__') return v;
-      return portEl.value.trim() || 'ttyUSB0';
+      return portSelect.value === OTHER ? portCustom.value.trim() : portSelect.value;
     }
 
     function currentBaud() {
-      const v = baudPresetEl.value;
-      if (v && v !== '__custom__') return parseInt(v, 10) || 115200;
-      return parseInt(baudEl.value, 10) || 115200;
+      const raw = baudSelect.value === OTHER ? baudCustom.value : baudSelect.value;
+      const n = parseInt(raw, 10);
+      return n > 0 ? n : 0;
     }
 
-    function updateHintConsoleLine() {
-      if (!hintConsoleLine) return;
-      const p = currentPort();
-      const b = currentBaud();
-      if (!ws) {
-        hintConsoleLine.textContent = 'Console closed';
-        return;
+    function fillBauds() {
+      baudSelect.textContent = '';
+      for (const b of BAUDS) baudSelect.add(new Option(String(b), String(b)));
+      baudSelect.add(new Option('Custom…', OTHER));
+      const want = parseInt(saved.baud, 10) || DEFAULT_BAUD;
+      if (BAUDS.includes(want)) {
+        baudSelect.value = String(want);
+      } else {
+        baudSelect.value = OTHER;
+        baudCustom.value = String(want);
       }
-      switch (ws.readyState) {
-        case WebSocket.CONNECTING:
-          hintConsoleLine.textContent = 'Console connecting…';
-          break;
-        case WebSocket.OPEN:
-          hintConsoleLine.textContent = 'Console opened: ' + p + '@' + b;
-          break;
-        default:
-          hintConsoleLine.textContent = 'Console closed';
+      baudCustom.classList.toggle('hidden', baudSelect.value !== OTHER);
+    }
+
+    function fillPorts(ports, preferred) {
+      portSelect.textContent = '';
+      for (const p of ports) portSelect.add(new Option(p, p));
+      portSelect.add(new Option('Other…', OTHER));
+      if (preferred && ports.includes(preferred)) {
+        portSelect.value = preferred;
+      } else if (preferred) {                       // a name typed before, or a port that is no longer listed
+        portSelect.value = OTHER;
+        portCustom.value = preferred;
+      } else {
+        portSelect.value = ports.length ? ports[0] : OTHER;
+      }
+      portCustom.classList.toggle('hidden', portSelect.value !== OTHER);
+    }
+
+    function setNote(text, isError) {
+      note.textContent = text || '';
+      note.classList.toggle('error', !!isError);
+    }
+
+    async function refreshPorts() {
+      const keep = currentPort() || saved.port || '';
+      btnPorts.disabled = true;
+      setNote('Reading the ports of the device…');
+      try {
+        const r = await fetch('/api/ports', { cache: 'no-store' });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        const list = Array.isArray(j.ports) ? [...new Set(j.ports.filter(Boolean))] : [];
+        fillPorts(list, keep);
+        setNote(list.length ? list.length + ' port' + (list.length === 1 ? '' : 's') + ' found on the device.'
+                            : 'The device reports no serial port. Plug in the adapter and refresh, or type the port name.');
+      } catch (e) {
+        fillPorts([], keep);
+        setNote('Could not read the ports: ' + (e.message || e), true);
+      } finally {
+        btnPorts.disabled = !!ws;
       }
     }
 
-    function uartConfigJSON() {
-      const p = currentPort();
-      portEl.value = p;
-      return JSON.stringify({
-        port: p,
-        baud: currentBaud(),
-        databits: parseInt(databitsEl.value, 10) || 8,
-        parity: parityEl.value,
-        stop: parseInt(stopEl.value, 10) || 1,
-        chunk: parseInt(chunkEl.value, 10) || 4096,
-        gravity: ''
+    portSelect.addEventListener('change', () => {
+      portCustom.classList.toggle('hidden', portSelect.value !== OTHER);
+      if (portSelect.value === OTHER) portCustom.focus();
+    });
+    baudSelect.addEventListener('change', () => {
+      baudCustom.classList.toggle('hidden', baudSelect.value !== OTHER);
+      if (baudSelect.value === OTHER) baudCustom.focus();
+    });
+    btnPorts.addEventListener('click', refreshPorts);
+
+    // ---------------------------------------------------------------- terminal
+
+    // xterm.js is a full terminal emulator: colours, cursor movement and
+    // full-screen programs work, and it keeps its own scrollback.
+    const term = new Terminal({
+      cursorBlink: true,
+      scrollback: SCROLLBACK_LINES,
+      lineHeight: 1.1,                                      // room for underscores when the page draws the text itself
+      disableStdin: true,                                   // until a port is open
+      fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace',
+      fontSize: window.matchMedia('(max-width: 640px)').matches ? 12 : 14,
+      theme: {
+        background: '#05050a', foreground: '#e6e6f0', cursor: '#8f7bea', cursorAccent: '#05050a',
+        selectionBackground: 'rgba(105, 76, 219, 0.45)',
+        black: '#1b1b29', red: '#f87171', green: '#34d399', yellow: '#fbbf24',
+        blue: '#7aa2f7', magenta: '#b794f6', cyan: '#22d3ee', white: '#d6d6e3',
+        brightBlack: '#6b6b88', brightRed: '#fca5a5', brightGreen: '#6ee7b7', brightYellow: '#fde68a',
+        brightBlue: '#a5c0ff', brightMagenta: '#d6bcfa', brightCyan: '#67e8f9', brightWhite: '#ffffff'
+      }
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(screenEl);
+
+    // Draw with the graphics card when the browser allows it. This renderer
+    // draws lines, boxes and block characters itself, cell by cell, so logos
+    // and frames made of characters line up whatever the font. Without it the
+    // terminal still works, drawn as ordinary page text.
+    try {
+      const gpu = new WebglAddon.WebglAddon();
+      gpu.onContextLoss(() => gpu.dispose());
+      term.loadAddon(gpu);
+    } catch (e) { /* no WebGL here */ }
+
+    function fit() {
+      try { fitAddon.fit(); } catch (e) { /* not visible yet */ }
+      sizeEl.textContent = term.cols + '×' + term.rows;
+    }
+    term.onResize(() => { sizeEl.textContent = term.cols + '×' + term.rows; });
+    new ResizeObserver(fit).observe(screenEl);
+    fit();
+
+    let rxBytes = 0, txBytes = 0;
+    let latin1 = null;
+    let countersDirty = false;
+
+    function showCounters() {
+      if (countersDirty) return;
+      countersDirty = true;
+      requestAnimationFrame(() => {
+        countersDirty = false;
+        counters.textContent = 'RX ' + rxBytes + ' · TX ' + txBytes;
       });
     }
 
-    function setConnected(on) {
-      btnConnect.textContent = on ? 'Disconnect' : 'Connect';
-      btnConnect.classList.remove('btn-primary', 'btn-secondary');
-      btnConnect.classList.add(on ? 'btn-secondary' : 'btn-primary');
+    function receive(bytes) {
+      rxBytes += bytes.length;
+      // The terminal decodes UTF-8 itself, also when a character is split between two blocks.
+      if (encoding.value === 'utf8') term.write(bytes);
+      else term.write(latin1.decode(bytes, { stream: true }));
+      showCounters();
+    }
+
+    // A message from the app or the page, not serial data.
+    function notice(message, isError) {
+      const colour = isError ? '\x1b[1;31m' : '\x1b[2m';
+      term.write((term.buffer.active.cursorX ? '\r\n' : '') + colour + '[' + message + ']\x1b[0m\r\n');
+    }
+
+    function terminalText() {
+      const buffer = term.buffer.active;
+      const lines = [];
+      for (let i = 0; i < buffer.length; i++) {
+        const row = buffer.getLine(i);
+        if (!row) continue;
+        const text = row.translateToString(true);
+        if (row.isWrapped && lines.length) lines[lines.length - 1] += text;   // a long line shown on several rows
+        else lines.push(text);
+      }
+      while (lines.length && lines[lines.length - 1] === '') lines.pop();
+      return lines.join('\n') + '\n';
+    }
+
+    btnClear.addEventListener('click', () => { term.reset(); term.focus(); });
+
+    btnSave.addEventListener('click', () => {
+      const blob = new Blob([terminalText()], { type: 'text/plain' });
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+      a.href = URL.createObjectURL(blob);
+      a.download = 'serial-' + (currentPort() || 'console') + '-' + stamp + '.log';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+
+    // ---------------------------------------------------------------- sending
+
+    function connected() {
+      return ws && ws.readyState === WebSocket.OPEN;
+    }
+
+    function encode(text) {
+      if (encoding.value === 'utf8') return new TextEncoder().encode(text);
+      const out = new Uint8Array(text.length);
+      for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        out[i] = c < 256 ? c : 0x3f;                    // not in Latin-1: send "?"
+      }
+      return out;
+    }
+
+    function sendBytes(bytes) {
+      if (!connected() || !bytes.length) return;
+      ws.send(bytes);
+      txBytes += bytes.length;
+      showCounters();
+    }
+
+    function enterBytes() {
+      return enterMode.value === 'lf' ? '\n' : enterMode.value === 'crlf' ? '\r\n' : '\r';
+    }
+
+    // What local echo shows for the text just sent: printable text as it is,
+    // Enter as a new line, Backspace as an erased character; nothing for
+    // arrows and the other control sequences.
+    function echoOf(data) {
+      if (data.charAt(0) === '\x1b') return '';
+      let out = '';
+      for (const ch of data) {
+        const code = ch.codePointAt(0);
+        if (ch === '\r') out += '\r\n';
+        else if (code === 0x7f || code === 0x08) out += '\b \b';
+        else if (code >= 0x20 || code === 0x09) out += ch;
+      }
+      return out;
+    }
+
+    // Keys, paste and on-screen keyboards all arrive here, already translated
+    // by the terminal (arrows as escape sequences, Ctrl+C as 0x03, …).
+    term.onData((data) => {
+      if (!connected()) return;
+      if (localEcho.checked) term.write(echoOf(data));
+      sendBytes(encode(enterMode.value === 'cr' ? data : data.replace(/\r/g, enterBytes())));
+    });
+
+    // Raw bytes (mouse reports from full-screen programs).
+    term.onBinary((data) => {
+      const out = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i++) out[i] = data.charCodeAt(i) & 0xff;
+      sendBytes(out);
+    });
+
+    // Copy and paste as in the rest of the browser: Ctrl+C copies when text is
+    // selected (otherwise it sends the interrupt), Ctrl+V pastes.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true;
+      const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
+      if (mod && !e.altKey && key === 'c' && (e.shiftKey || term.hasSelection())) return false;
+      if (mod && !e.altKey && key === 'v') return false;
+      return true;
+    });
+
+    btnSize.addEventListener('click', () => {
+      sendBytes(encode('stty cols ' + term.cols + ' rows ' + term.rows + enterBytes()));
+      term.focus();
+    });
+
+    // ---------------------------------------------------------------- connection
+
+    function setState(kind, text) {
+      stateEl.className = 'state ' + kind;
+      stateText.textContent = text;
+    }
+
+    function setControls(open) {
+      for (const el of [portSelect, portCustom, baudSelect, baudCustom, databits, parity, stop, chunk]) el.disabled = open;
+      btnPorts.disabled = open;
+      btnSize.disabled = !open;
+      settingsEl.classList.toggle('open', open);         // small screens keep only the button while connected
+      term.options.disableStdin = !open;
+      btnConnect.textContent = open ? 'Disconnect' : 'Connect';
+      btnConnect.className = open ? 'danger' : 'primary';
       btnConnect.disabled = false;
-      btnPorts.disabled = on;
-      portEl.disabled = on;
-      portSelectEl.disabled = on;
-      baudEl.disabled = on;
-      baudPresetEl.disabled = on;
-      databitsEl.disabled = on;
-      parityEl.disabled = on;
-      stopEl.disabled = on;
-      chunkEl.disabled = on;
-      term.disabled = !on;
-      enterLine.disabled = !on;
-      localEcho.disabled = !on;
-      rxUtf8.disabled = !on;
-      statusEl.textContent = on ? 'Connected' : 'Disconnected';
-      updateHintConsoleLine();
+    }
+
+    function connect() {
+      const port = currentPort(), baud = currentBaud();
+      if (!port) { setNote('Choose a port, or type its name.', true); return; }
+      if (!baud) { setNote('Enter a valid baud rate.', true); return; }
+      setNote('');
+      saveSettings();
+      term.reset();
+      rxBytes = 0; txBytes = 0;
+      showCounters();
+      latin1 = new TextDecoder('iso-8859-1');
+
+      const label = port + ' @ ' + baud + ' ' + databits.value + parity.value + stop.value;
+      setState('connecting', 'Connecting to ' + port + '…');
+      btnConnect.disabled = true;
+
+      let failed = '';
+      const socket = new WebSocket(wsURL);
+      socket.binaryType = 'arraybuffer';
+      ws = socket;
+
+      socket.onopen = () => {
+        socket.send(JSON.stringify({
+          port: port, baud: baud, databits: parseInt(databits.value, 10), parity: parity.value,
+          stop: parseInt(stop.value, 10), chunk: parseInt(chunk.value, 10) || 4096
+        }));
+        setControls(true);
+        setState('connected', label);
+        term.focus();
+      };
+
+      socket.onmessage = (ev) => {
+        if (typeof ev.data === 'string') {          // text frames are messages from the app, not serial data
+          failed = ev.data;
+          notice(ev.data, true);
+          return;
+        }
+        receive(new Uint8Array(ev.data));
+      };
+
+      socket.onclose = () => {
+        if (ws !== socket) return;
+        ws = null;
+        setControls(false);
+        if (failed) {
+          setState('error', failed);
+        } else {
+          setState('', 'Disconnected');
+          notice('Disconnected');
+        }
+      };
+
+      socket.onerror = () => {
+        if (!failed) failed = 'Could not connect to the app. Reload the page and try again.';
+      };
     }
 
     function disconnect() {
-      uartRxEscPrefix = '';
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-      setConnected(false);
+      if (ws) ws.close();
     }
 
-    term.addEventListener('keydown', (e) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN || term.disabled) return;
+    btnConnect.addEventListener('click', () => (ws ? disconnect() : connect()));
 
-      moveCaretEnd();
+    for (const el of [enterMode, encoding, localEcho]) el.addEventListener('change', saveSettings);
 
-      /* VT100 CSI cursor keys — forwarded so readline/bash gets history (↑↓) and line edit (←→). */
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        ws.send('\x1b[A');
-        moveCaretEnd();
-        return;
-      }
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        ws.send('\x1b[B');
-        moveCaretEnd();
-        return;
-      }
-      if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        ws.send('\x1b[C');
-        moveCaretEnd();
-        return;
-      }
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        ws.send('\x1b[D');
-        moveCaretEnd();
-        return;
-      }
-      /* xterm-style function keys (nano, less, etc.). */
-      if (e.key === 'Home') {
-        e.preventDefault();
-        ws.send('\x1b[1~');
-        moveCaretEnd();
-        return;
-      }
-      if (e.key === 'End') {
-        e.preventDefault();
-        ws.send('\x1b[4~');
-        moveCaretEnd();
-        return;
-      }
-      if (e.key === 'PageUp') {
-        e.preventDefault();
-        ws.send('\x1b[5~');
-        moveCaretEnd();
-        return;
-      }
-      if (e.key === 'PageDown') {
-        e.preventDefault();
-        ws.send('\x1b[6~');
-        moveCaretEnd();
-        return;
-      }
-      if (e.key === 'Insert') {
-        e.preventDefault();
-        ws.send('\x1b[2~');
-        moveCaretEnd();
-        return;
-      }
-      if (e.key === 'Delete') {
-        e.preventDefault();
-        ws.send('\x1b[3~');
-        moveCaretEnd();
-        return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        ws.send('\x1b');
-        moveCaretEnd();
-        return;
-      }
+    // ---------------------------------------------------------------- start
 
-      if (e.key === 'Tab' && e.shiftKey) {
-        e.preventDefault();
-        ws.send('\x1b[Z');
-        moveCaretEnd();
-        return;
-      }
+    if (saved.databits) databits.value = saved.databits;
+    if (saved.parity) parity.value = saved.parity;
+    if (saved.stop) stop.value = saved.stop;
+    if (saved.chunk) chunk.value = saved.chunk;
+    if (saved.enter) enterMode.value = saved.enter;
+    if (saved.encoding) encoding.value = saved.encoding;
+    localEcho.checked = !!saved.echo;
 
-      /* Ctrl+A–Z → 0x01–0x1A (nano ^K, ^Z suspend, ^X exit, etc.). */
-      if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) {
-        const k = e.key.toLowerCase();
-        if (k >= 'a' && k <= 'z') {
-          e.preventDefault();
-          ws.send(String.fromCharCode(k.charCodeAt(0) - 96));
-          if (localEcho.checked) term.value += '^' + k.toUpperCase();
-          moveCaretEnd();
-          return;
-        }
-      }
-
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        if (e.repeat) return;
-        const nl = enterLineBytes();
-        ws.send(nl);
-        if (localEcho.checked) {
-          term.value += '\n';
-        }
-        moveCaretEnd();
-        return;
-      }
-
-      if (e.key === 'Backspace') {
-        e.preventDefault();
-        ws.send('\x7f');
-        if (localEcho.checked && term.value.length > rxEnd) {
-          term.value = term.value.slice(0, -1);
-        }
-        moveCaretEnd();
-        return;
-      }
-
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        ws.send('\t');
-        if (localEcho.checked) term.value += '\t';
-        moveCaretEnd();
-        return;
-      }
-
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        ws.send(e.key);
-        if (localEcho.checked) term.value += e.key;
-        moveCaretEnd();
-      }
-    });
-
-    term.addEventListener('paste', (e) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN || term.disabled) return;
-      e.preventDefault();
-      const t = e.clipboardData.getData('text');
-      ws.send(t);
-      if (localEcho.checked) term.value += t;
-      moveCaretEnd();
-    });
-
-    term.addEventListener('click', () => moveCaretEnd());
-
-    function syncPortCustomVisibility() {
-      const hasPortsFromApi = portSelectEl.options.length >= 3;
-      const pickOther = portSelectEl.value === '__other__';
-      const showCustom = !hasPortsFromApi || pickOther;
-      portCustomWrap.classList.toggle('hidden', !showCustom);
-      if (!showCustom && portSelectEl.value && portSelectEl.value !== '__other__') {
-        portEl.value = portSelectEl.value;
-      }
-      updateHintConsoleLine();
-    }
-
-    function syncBaudCustomVisibility() {
-      const show = baudPresetEl.value === '__custom__';
-      baudCustomWrap.classList.toggle('hidden', !show);
-      updateHintConsoleLine();
-    }
-
-    function fillPortSelect(ports) {
-      const sel = portSelectEl;
-      while (sel.options.length > 1) sel.remove(1);
-      const seen = new Set();
-      if (ports && ports.length) {
-        for (const p of ports) {
-          if (!p || seen.has(p)) continue;
-          seen.add(p);
-          const opt = document.createElement('option');
-          opt.value = p;
-          opt.textContent = p;
-          sel.appendChild(opt);
-        }
-      }
-      const other = document.createElement('option');
-      other.value = '__other__';
-      other.textContent = 'Other (type below)…';
-      sel.appendChild(other);
-      if (!ports || !ports.length) {
-        portSelectEl.value = '__other__';
-      }
-      syncPortSelectFromInput();
-    }
-
-    function syncPortSelectFromInput() {
-      const cur = portEl.value.trim();
-      if (!cur) {
-        if (portSelectEl.value !== '__other__') portSelectEl.value = '';
-        syncPortCustomVisibility();
-        return;
-      }
-      const match = [...portSelectEl.options].find(o => o.value === cur);
-      if (match) portSelectEl.value = cur;
-      else portSelectEl.value = '__other__';
-      syncPortCustomVisibility();
-    }
-
-    portSelectEl.addEventListener('change', () => {
-      const v = portSelectEl.value;
-      if (v && v !== '__other__') portEl.value = v;
-      syncPortCustomVisibility();
-    });
-    portEl.addEventListener('input', () => syncPortSelectFromInput());
-    portEl.addEventListener('change', () => syncPortSelectFromInput());
-
-    function fillBaudPreset() {
-      while (baudPresetEl.options.length > 1) baudPresetEl.remove(1);
-      for (const b of STANDARD_BAUDS) {
-        const opt = document.createElement('option');
-        opt.value = String(b);
-        opt.textContent = String(b);
-        baudPresetEl.appendChild(opt);
-      }
-      const o = document.createElement('option');
-      o.value = '__custom__';
-      o.textContent = 'Custom…';
-      baudPresetEl.appendChild(o);
-      syncBaudPresetFromInput();
-      lastPresetBaud =
-        baudPresetEl.value && baudPresetEl.value !== '__custom__'
-          ? baudPresetEl.value
-          : String(parseInt(baudEl.value, 10) || 115200);
-    }
-
-    function syncBaudPresetFromInput() {
-      const raw = baudEl.value.trim();
-      if (!raw) {
-        baudPresetEl.value = '';
-        syncBaudCustomVisibility();
-        return;
-      }
-      const n = parseInt(raw, 10);
-      if (isNaN(n)) {
-        baudPresetEl.value = '__custom__';
-        syncBaudCustomVisibility();
-        return;
-      }
-      const s = String(n);
-      const match = [...baudPresetEl.options].find(o => o.value === s);
-      if (match && match.value !== '__custom__') {
-        baudPresetEl.value = s;
-        lastPresetBaud = s;
-      } else {
-        baudPresetEl.value = '__custom__';
-      }
-      syncBaudCustomVisibility();
-    }
-
-    baudPresetEl.addEventListener('change', () => {
-      const v = baudPresetEl.value;
-      if (v && v !== '__custom__') {
-        baudEl.value = v;
-        lastPresetBaud = v;
-      } else if (v === '__custom__') {
-        baudEl.value = lastPresetBaud;
-      }
-      syncBaudCustomVisibility();
-    });
-    baudEl.addEventListener('input', () => syncBaudPresetFromInput());
-    baudEl.addEventListener('change', () => syncBaudPresetFromInput());
-
-    async function refreshPorts(showLoading) {
-      if (location.protocol === 'file:') return;
-      portsHint.textContent = showLoading ? 'Requesting…' : 'Loading ports…';
-      const url = '/api/ports';
-      try {
-        const r = await fetch(url);
-        const j = await r.json();
-        if (!r.ok) {
-          portsHint.textContent = 'Error: ' + (j.error || r.status);
-          fillPortSelect([]);
-          return;
-        }
-        const list = Array.isArray(j.ports) ? j.ports : [];
-        fillPortSelect(list);
-        portsHint.textContent = 'Ports (' + list.length + '): ' + (list.length ? list.join(', ') : '(none)');
-        if (list.length === 1) {
-          portEl.value = list[0];
-          syncPortSelectFromInput();
-        }
-      } catch (e) {
-        portsHint.textContent = String(e.message || e);
-        fillPortSelect([]);
-      }
-    }
-
-    btnPorts.addEventListener('click', () => refreshPorts(true));
-
-    fillBaudPreset();
-    fillPortSelect([]);
-    if (location.protocol !== 'file:') {
-      refreshPorts(false);
-    }
-
-    btnConnect.addEventListener('click', () => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        disconnect();
-        return;
-      }
-      if (ws && ws.readyState === WebSocket.CONNECTING) {
-        return;
-      }
-      if (location.protocol === 'file:') {
-        term.value = 'Open this page through the Serial Console app, not as a file.\n';
-        return;
-      }
-      term.value = '';
-      rxEnd = 0;
-      uartRxEscPrefix = '';
-      statusEl.textContent = 'Connecting…';
-      btnConnect.textContent = 'Connecting…';
-      btnConnect.disabled = true;
-      ws = new WebSocket(wsURL);
-      ws.binaryType = 'arraybuffer';
-      updateHintConsoleLine();
-      ws.onopen = () => {
-        ws.send(uartConfigJSON());
-        setConnected(true);
-        statusEl.textContent = 'Connected';
-        term.focus();
-      };
-      ws.onmessage = (ev) => {
-        if (typeof ev.data === 'string') {
-          appendRxFromUart(ev.data);
-          return;
-        }
-        const u8 = new Uint8Array(ev.data);
-        appendRxFromUart(decodeUartRx(u8));
-      };
-      ws.onclose = (ev) => {
-        ws = null;
-        setConnected(false);
-        statusEl.textContent = 'Disconnected';
-      };
-      ws.onerror = () => {
-        statusEl.textContent = 'WebSocket error';
-        appendRx('\n[WebSocket error]\n');
-        btnConnect.disabled = false;
-        btnConnect.textContent = 'Connect';
-        btnConnect.classList.remove('btn-secondary');
-        btnConnect.classList.add('btn-primary');
-        updateHintConsoleLine();
-      };
-    });
+    fillBauds();
+    fillPorts([], saved.port || '');
+    refreshPorts();
+    notice('Choose a port and a baud rate, then press Connect.');
   </script>
 </body>
 </html>
