@@ -129,8 +129,8 @@ func main() {
 	}
 }
 
-// stampedPage returns the page with the WebSocket token and with a mark of
-// this build in the address of every file it loads. Browsers keep those files for a while; with the mark,
+// stampedPage returns the page with the app version, the WebSocket token and
+// a mark of this build in the address of every file it loads. Browsers keep those files for a while; with the mark,
 // a new version of the app is never shown with the files of the previous one.
 func stampedPage() ([]byte, error) {
 	h := sha256.New()
@@ -150,6 +150,7 @@ func stampedPage() ([]byte, error) {
 	}
 	build := hex.EncodeToString(h.Sum(nil))[:10]
 	page := bytes.ReplaceAll(pageHTML, []byte("__BUILD__"), []byte(build))
+	page = bytes.ReplaceAll(page, []byte("__VERSION__"), []byte(appManifest.Version))
 	return bytes.ReplaceAll(page, []byte("__TOKEN__"), []byte(pageToken)), nil
 }
 
@@ -241,6 +242,10 @@ func run(ctx context.Context) error {
 		handleUARTWebSocket(w, r)
 	})
 
+	// The same console over plain HTTP requests, for when a WebSocket cannot reach the app.
+	appCtx = ctx
+	registerHTTPLink(mux)
+
 	// Connect to Orbit OS to register the page with the Launcher. Without it
 	// (for example when developing with no device) the page is still served
 	// on this computer only.
@@ -314,7 +319,7 @@ func listenAndRegister(client *orbitos.Client) (listener net.Listener, registere
 	return nil, false, fmt.Errorf("no free web interface port in %d-%d", portMin, portMax)
 }
 
-// uartOpenMsg is the first WebSocket message (JSON): port/baud/gravity config.
+// uartOpenMsg is the page's settings (JSON): the first WebSocket message, or the body that opens an HTTP link.
 type uartOpenMsg struct {
 	Port     string `json:"port"`
 	Baud     int    `json:"baud"`
@@ -323,6 +328,66 @@ type uartOpenMsg struct {
 	Stop     int    `json:"stop"`
 	Chunk    int    `json:"chunk"`
 	Gravity  string `json:"gravity"`
+}
+
+// settings checks the page's settings and fills in the defaults.
+func (open uartOpenMsg) settings() (cfg orbitos.UartConfig, maxChunk int, host string, err error) {
+	port := strings.TrimSpace(open.Port)
+	if port == "" {
+		return cfg, 0, "", errors.New("Missing UART port: set \"port\" in the JSON config (e.g. ttyUSB0).")
+	}
+
+	baud := open.Baud
+	if baud <= 0 {
+		baud = defaultBaud
+	}
+
+	databits := open.DataBits
+	if databits < 5 || databits > 8 {
+		databits = 8
+	}
+
+	stop := open.Stop
+	if stop != 2 {
+		stop = 1
+	}
+
+	maxChunk = open.Chunk
+	if maxChunk < 256 {
+		maxChunk = defaultMaxChunk
+	}
+
+	host = strings.TrimSpace(open.Gravity)
+	if host == "" {
+		host = gravityHost
+	}
+
+	cfg = orbitos.UartConfig{
+		Port:        port,
+		Baudrate:    baud,
+		DataBits:    databits,
+		Parity:      parseParity(open.Parity),
+		StopBits:    parseStopBits(stop),
+		FlowControl: orbitos.UartFlowNone,
+	}
+	return cfg, maxChunk, host, nil
+}
+
+// acquireSession takes the single console; it reports false when another page has it.
+func acquireSession() bool {
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	if sessionActive {
+		return false
+	}
+	sessionActive = true
+	return true
+}
+
+func releaseSession() {
+	sessionMu.Lock()
+	sessionActive = false
+	sessionMu.Unlock()
 }
 
 func handleUARTWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -354,61 +419,19 @@ func handleUARTWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	port := strings.TrimSpace(open.Port)
-	if port == "" {
-		closeWith("Missing UART port: set \"port\" in the JSON config (e.g. ttyUSB0).")
+	cfg, maxChunk, host, err := open.settings()
+	if err != nil {
+		closeWith(err.Error())
 		return
 	}
 
-	baud := open.Baud
-	if baud <= 0 {
-		baud = defaultBaud
-	}
+	logger.Infof(logTag, "WebSocket UART: port=%q baud=%d gravity=%q", cfg.Port, cfg.Baudrate, host)
 
-	databits := open.DataBits
-	if databits < 5 || databits > 8 {
-		databits = 8
-	}
-
-	stop := open.Stop
-	if stop != 2 {
-		stop = 1
-	}
-
-	maxChunk := open.Chunk
-	if maxChunk < 256 {
-		maxChunk = defaultMaxChunk
-	}
-
-	host := strings.TrimSpace(open.Gravity)
-	if host == "" {
-		host = gravityHost
-	}
-
-	cfg := orbitos.UartConfig{
-		Port:        port,
-		Baudrate:    baud,
-		DataBits:    databits,
-		Parity:      parseParity(open.Parity),
-		StopBits:    parseStopBits(stop),
-		FlowControl: orbitos.UartFlowNone,
-	}
-
-	logger.Infof(logTag, "WebSocket UART: port=%q baud=%d gravity=%q", port, baud, host)
-
-	sessionMu.Lock()
-	if sessionActive {
-		sessionMu.Unlock()
+	if !acquireSession() {
 		closeWith("UART session already in use; close the other tab.")
 		return
 	}
-	sessionActive = true
-	sessionMu.Unlock()
-	defer func() {
-		sessionMu.Lock()
-		sessionActive = false
-		sessionMu.Unlock()
-	}()
+	defer releaseSession()
 
 	var writeMu sync.Mutex
 	writeText := func(s string) {

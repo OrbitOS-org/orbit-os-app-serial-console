@@ -64,6 +64,9 @@ body {
   min-width: 0;
 }
 
+.brand a { display: block; flex-shrink: 0; border-radius: 6px; }
+.brand a:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 3px; }
+
 .brand img {
   height: 40px;
   width: auto;
@@ -283,6 +286,15 @@ details.advanced .field {
 .toolbar .spacer { flex: 1 1 auto; }
 .toolbar .counters { font-family: var(--mono); font-size: 0.78rem; white-space: nowrap; }
 
+/* Footer: version, rights and licences. */
+.footer {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.footer .rights { white-space: nowrap; }
+
 @media (max-width: 640px) {
   .shell { padding: 10px 10px 8px; gap: 10px; }
   .brand img { height: 32px; }
@@ -293,6 +305,8 @@ details.advanced .field {
   .field-connect button { width: 100%; }
   .console .screen .xterm { inset: 8px 2px 4px 8px; }
   .toolbar .spacer { display: none; }
+  .footer .dot { display: none; }
+  .footer .rights { display: block; }
 
   /* While connected, the settings give their room to the terminal; the state at the top shows port and speed. */
   .settings.open > .field:not(.field-connect),

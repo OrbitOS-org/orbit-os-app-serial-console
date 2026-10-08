@@ -13,7 +13,7 @@
 
     <header class="header">
       <div class="brand">
-        <img src="/orbit-logo.svg?v=__BUILD__" alt="Orbit OS" width="143" height="48" />
+        <a href="https://www.orbit-os.org/" target="_blank" rel="noopener" title="Orbit OS website"><img src="/orbit-logo.svg?v=__BUILD__" alt="Orbit OS" width="143" height="48" /></a>
         <h1>Serial Console</h1>
       </div>
       <div id="state" class="state" role="status" aria-live="polite">
@@ -103,6 +103,10 @@
       </div>
     </section>
 
+    <footer class="footer">
+      Serial Console v__VERSION__ · Licensed under Apache-2.0 <span class="dot">·</span> <span class="rights">© 2026 Orbit OS</span>
+    </footer>
+
   </div>
 
   <script src="/xterm/xterm.js?v=__BUILD__"></script>
@@ -128,9 +132,11 @@
     const DEFAULT_BAUD = 9600;
     const SCROLLBACK_LINES = 10000;
     const SETTINGS_KEY = 'serial-console.settings';
-    const wsURL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws?t=__TOKEN__';
+    const TOKEN = '__TOKEN__';                    // proves to the app that a request comes from this page
+    const wsURL = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws?t=' + TOKEN;
 
-    let ws = null;
+    let link = null;                              // the open console: a WebSocket, or HTTP requests
+    let httpOnly = false;                         // a WebSocket cannot reach the app from here
 
     // ---------------------------------------------------------------- settings
 
@@ -210,7 +216,7 @@
         fillPorts([], keep);
         setNote('Could not read the ports: ' + (e.message || e), true);
       } finally {
-        btnPorts.disabled = !!ws;
+        btnPorts.disabled = !!link;
       }
     }
 
@@ -324,7 +330,7 @@
     // ---------------------------------------------------------------- sending
 
     function connected() {
-      return ws && ws.readyState === WebSocket.OPEN;
+      return !!link && link.open;
     }
 
     function encode(text) {
@@ -339,7 +345,7 @@
 
     function sendBytes(bytes) {
       if (!connected() || !bytes.length) return;
-      ws.send(bytes);
+      link.send(bytes);
       txBytes += bytes.length;
       showCounters();
     }
@@ -411,6 +417,159 @@
       btnConnect.disabled = false;
     }
 
+    // A link carries the console between this page and the app. There are two
+    // kinds with the same shape: { open, send(bytes), close() }, reporting to
+    // on.open(), on.data(bytes), on.message(text) and on.close(everOpened).
+
+    // The normal one: a WebSocket.
+    function wsLink(config, on) {
+      const socket = new WebSocket(wsURL);
+      socket.binaryType = 'arraybuffer';
+      let opened = false;
+      const self = {
+        open: false,
+        send: (bytes) => socket.send(bytes),
+        close: () => socket.close()
+      };
+      const giveUp = setTimeout(() => { if (!opened) socket.close(); }, 8000);
+      socket.onopen = () => {
+        opened = true;
+        self.open = true;
+        socket.send(JSON.stringify(config));
+        on.open();
+      };
+      socket.onmessage = (ev) => {
+        if (typeof ev.data === 'string') on.message(ev.data);    // text frames are messages from the app
+        else on.data(new Uint8Array(ev.data));
+      };
+      socket.onclose = () => {
+        clearTimeout(giveUp);
+        self.open = false;
+        on.close(opened);
+      };
+      return self;
+    }
+
+    // The other one: plain HTTP requests, for when a WebSocket cannot reach the
+    // app (remote access through a service that only carries HTTP). The page
+    // keeps asking the app for what was received; the app answers as soon as
+    // there is something. What is typed goes in separate requests, one at a
+    // time so that the order is kept.
+    function httpLink(config, on) {
+      let id = '', from = 0, seen = 0, closed = false, failures = 0;
+      let queue = [], sending = false;
+      const api = (path, extra) => '/api/session' + path + '?t=' + TOKEN + '&s=' + id + (extra || '');
+      const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+
+      const self = {
+        open: false,
+        send(bytes) {
+          queue.push(bytes);
+          if (!sending) pump();
+        },
+        close() {
+          if (closed) return;
+          if (id) fetch(api('/close'), { method: 'POST', keepalive: true }).catch(() => {});
+          finish();
+        }
+      };
+
+      function finish() {
+        if (closed) return;
+        closed = true;
+        const wasOpen = self.open;
+        self.open = false;
+        on.close(wasOpen);
+      }
+
+      async function pump() {
+        sending = true;
+        while (queue.length && !closed) {
+          const total = queue.reduce((n, b) => n + b.length, 0);
+          const body = new Uint8Array(total);
+          let at = 0;
+          for (const b of queue) { body.set(b, at); at += b.length; }
+          queue = [];
+          let sent = false;
+          for (let attempt = 0; attempt < 3 && !sent && !closed; attempt++) {
+            try {
+              const r = await fetch(api('/tx'), { method: 'POST', body: body, cache: 'no-store' });
+              if (r.status === 410) { finish(); break; }
+              sent = r.ok;
+            } catch (e) { /* tried again below */ }
+            if (!sent) await pause(400);
+          }
+          if (!sent && !closed) on.message('Could not send to the app: ' + total + ' byte' + (total === 1 ? '' : 's') + ' not sent');
+        }
+        sending = false;
+      }
+
+      // One answer is a list of frames: a type byte, the length in 4 bytes, the payload.
+      function readFrames(bytes) {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        let at = 0, ended = false;
+        while (at + 5 <= bytes.length) {
+          const kind = String.fromCharCode(bytes[at]), length = view.getUint32(at + 1);
+          const payload = bytes.subarray(at + 5, at + 5 + length);
+          at += 5 + length;
+          if (kind === 'D') on.data(payload);
+          else if (kind === 'M') on.message(new TextDecoder().decode(payload));
+          else if (kind === 'L') on.message('Some received data was lost: it arrived faster than this connection carries it');
+          else if (kind === 'E') ended = true;
+          else if (kind === 'P') {
+            const next = new TextDecoder().decode(payload).split(',');
+            from = parseInt(next[0], 10) || 0;
+            seen = parseInt(next[1], 10) || 0;
+          }
+        }
+        return ended;
+      }
+
+      async function receive() {
+        while (!closed) {
+          try {
+            const r = await fetch(api('/rx', '&from=' + from + '&seen=' + seen), { cache: 'no-store' });
+            if (closed) return;
+            if (r.status === 410) { finish(); return; }           // the app no longer has this console
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const ended = readFrames(new Uint8Array(await r.arrayBuffer()));
+            failures = 0;
+            if (ended) { finish(); return; }
+          } catch (e) {
+            if (closed) return;
+            if (++failures >= 6) {
+              on.message('Connection to the app lost');
+              finish();
+              return;
+            }
+            await pause(500 * failures);
+          }
+        }
+      }
+
+      (async () => {
+        try {
+          const r = await fetch('/api/session?t=' + TOKEN, {
+            method: 'POST', cache: 'no-store',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config)
+          });
+          const answer = await r.json().catch(() => ({}));
+          if (!r.ok || !answer.id) throw new Error(answer.error || 'Could not connect to the app. Reload the page and try again.');
+          if (closed) return;
+          id = answer.id;
+          self.open = true;
+          on.open();
+          receive();
+        } catch (e) {
+          if (closed) return;
+          on.message(e.message || String(e));
+          finish();
+        }
+      })();
+
+      return self;
+    }
+
     function connect() {
       const port = currentPort(), baud = currentBaud();
       if (!port) { setNote('Choose a port, or type its name.', true); return; }
@@ -422,56 +581,67 @@
       showCounters();
       latin1 = new TextDecoder('iso-8859-1');
 
+      const config = {
+        port: port, baud: baud, databits: parseInt(databits.value, 10), parity: parity.value,
+        stop: parseInt(stop.value, 10), chunk: parseInt(chunk.value, 10) || 4096
+      };
       const label = port + ' @ ' + baud + ' ' + databits.value + parity.value + stop.value;
       setState('connecting', 'Connecting to ' + port + '…');
       btnConnect.disabled = true;
+      start(config, label);
+    }
 
+    function start(config, label) {
+      const overHTTP = httpOnly;
       let failed = '';
-      const socket = new WebSocket(wsURL);
-      socket.binaryType = 'arraybuffer';
-      ws = socket;
+      let mine = null;
 
-      socket.onopen = () => {
-        socket.send(JSON.stringify({
-          port: port, baud: baud, databits: parseInt(databits.value, 10), parity: parity.value,
-          stop: parseInt(stop.value, 10), chunk: parseInt(chunk.value, 10) || 4096
-        }));
-        setControls(true);
-        setState('connected', label);
-        term.focus();
-      };
-
-      socket.onmessage = (ev) => {
-        if (typeof ev.data === 'string') {          // text frames are messages from the app, not serial data
-          failed = ev.data;
-          notice(ev.data, true);
-          return;
+      const on = {
+        open() {
+          setControls(true);
+          setState('connected', label + (overHTTP ? ' · HTTP' : ''));
+          if (overHTTP) setNote('A WebSocket cannot reach the app from here, so the console uses plain HTTP requests. It works the same, a little slower.');
+          term.focus();
+        },
+        data: receive,
+        message(text) {
+          failed = text;
+          notice(text, true);
+        },
+        close(everOpened) {
+          if (link !== mine) return;
+          link = null;
+          // The WebSocket never opened and the app said nothing: something on
+          // the way does not carry WebSockets. Use HTTP requests from now on.
+          if (!overHTTP && !everOpened && !failed) {
+            httpOnly = true;
+            start(config, label);
+            return;
+          }
+          setControls(false);
+          if (failed) {
+            setState('error', failed);
+          } else if (!everOpened) {
+            setState('error', 'Could not connect to the app. Reload the page and try again.');
+          } else {
+            setState('', 'Disconnected');
+            notice('Disconnected');
+          }
         }
-        receive(new Uint8Array(ev.data));
       };
 
-      socket.onclose = () => {
-        if (ws !== socket) return;
-        ws = null;
-        setControls(false);
-        if (failed) {
-          setState('error', failed);
-        } else {
-          setState('', 'Disconnected');
-          notice('Disconnected');
-        }
-      };
-
-      socket.onerror = () => {
-        if (!failed) failed = 'Could not connect to the app. Reload the page and try again.';
-      };
+      mine = (overHTTP ? httpLink : wsLink)(config, on);
+      link = mine;
     }
 
     function disconnect() {
-      if (ws) ws.close();
+      if (link) link.close();
     }
 
-    btnConnect.addEventListener('click', () => (ws ? disconnect() : connect()));
+    // Leaving the page: tell the app now, so that the port is free at once.
+    window.addEventListener('pagehide', disconnect);
+
+    btnConnect.addEventListener('click', () => (link ? disconnect() : connect()));
 
     for (const el of [enterMode, encoding, localEcho]) el.addEventListener('change', saveSettings);
 
