@@ -44,11 +44,11 @@ You need [VS Code](https://code.visualstudio.com/) with the Orbit Studio extensi
 2. In the Orbit sidebar, run **Add / Update SDK** and set your device's IP.
 3. Use **Run** to try it live against a device in Developer Mode, then **Build + Deploy** to install the signed `.orb`.
 
-**Without Orbit Studio:** `go build ./cmd/serial_console` builds the binary with the published SDK module — use Orbit Studio to package and sign the `.orb`.
+**Without Orbit Studio:** unpack the [SDK release](https://github.com/OrbitOS-org/orbit-os-sdk-go/releases/tag/v26.0.3) into `orbit-os-sdk-go/`, then `go build ./cmd/serial_console` builds the binary — use Orbit Studio to package and sign the `.orb`.
 
 ## Getting started
 
-1. Open **Serial Console** from the AppHub on your device (`http://<DEVICE_IP>`).
+1. Open the device portal at `http://<DEVICE_IP>`, sign in, and open **Serial Console** from the Launcher.
 2. Press **List ports**, choose the UART port and the baud rate of the equipment.
 3. Press **Connect** and type — received data appears as it arrives.
 
@@ -62,13 +62,16 @@ This project follows the standard [Orbit Studio](https://marketplace.visualstudi
 | `cmd/serial_console/orb/icon.svg` | launcher / Store icon |
 | `orbit.project.json` | Orbit Studio project settings |
 
-- **Recommended workflow:** open the folder in VS Code with Orbit Studio, **Add / Update SDK** (creates the local `orbit-os-sdk-go/` copy and `go.work`, both git-ignored), then **Run** to develop against a device in Developer Mode, or **Build + Deploy** to install the `.orb`.
-- Without Orbit Studio, `go build` uses the published SDK module [`github.com/OrbitOS-org/orbit-os-sdk-go/v26`](https://pkg.go.dev/github.com/OrbitOS-org/orbit-os-sdk-go/v26). The `-host <DEVICE_IP>` flag is only used when running off-device (development); on the device the SDK uses the local Unix socket.
+- **Recommended workflow:** open the folder in VS Code with Orbit Studio, **Add / Update SDK** (downloads the SDK into `orbit-os-sdk-go/`, which is not in the repository), then **Run** to develop against a device in Developer Mode, or **Build + Deploy** to install the `.orb`.
+- The project builds against that local SDK copy (`go.mod` and `go.work` point to it).
+- The `-host <DEVICE_IP>` flag is only used when running off-device (development); on the device the SDK connects locally. With **Run**, the page is served on your computer at `http://127.0.0.1:<port>`, with the port shown in the log.
 - Development TLS certificates live in `cmd/certs/grpc/` and are never committed.
 
 ## Security
 
-- The web server listens on **all interfaces, port 9002, with no login of its own**: anyone who can reach the device on that port can open the console and talk to the serial port. Use it on trusted networks, or block port 9002 in the device firewall (Settings → Firewall) and use the AppHub entry, which sits behind the device login.
+- The web page and the WebSocket listen on `127.0.0.1` only and are reached through the Orbit OS Launcher, at `http://<DEVICE_IP>/console`, behind the device login. They are not reachable directly from the network.
+- The app takes a port in the reserved range 50000–60000 (starting at 50002) and moves to the next one when a port is taken.
+- The WebSocket only accepts connections from the app's own page.
 - A serial console often gives a shell on the connected equipment — treat access to this app like access to that equipment.
 - Permissions used: `UartService`, `AppHubService`, `SystemService`.
 

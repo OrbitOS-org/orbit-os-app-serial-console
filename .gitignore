@@ -5,10 +5,8 @@
 packages/
 *.orb
 /serial_console
-# local SDK copy and Go workspace created by Orbit Studio
-# (the repo builds against the published module github.com/OrbitOS-org/orbit-os-sdk-go/v26)
+# local SDK copy downloaded by Orbit Studio
 orbit-os-sdk-go/
-go.work
 go.work.sum
 # local Orbit Studio settings
 orbit.project.local.json

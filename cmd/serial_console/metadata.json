@@ -1,6 +1,7 @@
 {
   "name": "Serial Console",
-  "version": "1.0.4",
+  "slug": "serial_console",
+  "version": "1.0.5",
   "description": "Web UART console (PuTTY-like)",
   "entry_point": "serial_console",
   "permissions": [

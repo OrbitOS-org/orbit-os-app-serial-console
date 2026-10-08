@@ -1,20 +1,29 @@
-// Serial Console — PuTTY-style web console over UART via the Orbit OS UART service: HTTP :9002 + WebSocket /ws.
+// Serial Console — PuTTY-style web console over UART through the Orbit OS UART service.
+//
+// The app serves a page and a WebSocket (/ws) on 127.0.0.1 only and registers them
+// with the Orbit OS Launcher, which serves the page at http://<device>/console
+// behind the device login.
 package main
 
 import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"flag"
+	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 
-	apphubv26 "github.com/OrbitOS-org/orbit-os-sdk-go/v26/api/app_hub_service/v26"
 	orbitos "github.com/OrbitOS-org/orbit-os-sdk-go/v26/client"
 	"github.com/OrbitOS-org/orbit-os-sdk-go/v26/logger"
 	"github.com/OrbitOS-org/orbit-os-sdk-go/v26/metadata"
@@ -40,7 +49,15 @@ var appManifest = metadata.MustParseAppManifestJSON(identityJSON)
 const logTag = "console"
 
 const (
-	webUIListen     = "0.0.0.0:9002"
+	// route is the path the Launcher serves the page at: http://<device>/console.
+	route = "/console"
+
+	// Web interface ports are reserved to the range portMin–portMax. The app
+	// starts at preferredPort and moves to the next one when a port is taken.
+	portMin       = 50000
+	portMax       = 60000
+	preferredPort = 50002
+
 	defaultBaud     = 9600
 	defaultMaxChunk = 4096
 )
@@ -52,9 +69,22 @@ var gravityHost = "192.168.1.100"
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // local testing
-	},
+	CheckOrigin:     sameOrigin,
+}
+
+// sameOrigin accepts a WebSocket only from a page served by this app: the
+// Origin header must name the host the request was sent to. It stops a page of
+// another site, open in the same browser, from driving the serial port.
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // not a browser
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host) || strings.EqualFold(u.Host, r.Header.Get("X-Forwarded-Host"))
 }
 
 var (
@@ -63,24 +93,37 @@ var (
 )
 
 func main() {
-	flag.StringVar(&gravityHost, "host", gravityHost, "Device IP address (development only)")
+	flag.StringVar(&gravityHost, "host", gravityHost, "Device IP address (development only; ignored when the app runs on the device)")
 	flag.Parse()
 
 	meta := metadata.Build(appManifest)
 	logger.Init(appManifest.PackageId, "INFO", true)
 
-	logger.Infof(logTag, "Starting %s v%s — HTTP %s", meta.Name, meta.Version, webUIListen)
+	logger.Infof(logTag, "Starting %s v%s", meta.Name, meta.Version)
 	appManifest.PrintInfo()
+
+	// Stop cleanly on Ctrl+C, and on SIGTERM, which Orbit OS sends to stop an app.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := run(ctx)
+	stop()
+	if err != nil {
+		logger.Fatalf(logTag, "%v", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context) error {
+	mux := http.NewServeMux()
 
 	serveIcon := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		_, _ = w.Write(iconSVG)
 	}
-	http.HandleFunc("/favicon.svg", serveIcon)
-	http.HandleFunc("/favicon.ico", serveIcon)
+	mux.HandleFunc("/favicon.svg", serveIcon)
+	mux.HandleFunc("/favicon.ico", serveIcon)
 
-	http.HandleFunc("/style.css", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/style.css", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -90,7 +133,7 @@ func main() {
 		_, _ = w.Write(styleCSS)
 	})
 
-	http.HandleFunc("/orbit-logo.png", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/orbit-logo.png", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -100,7 +143,7 @@ func main() {
 		_, _ = w.Write(orbitLogoPNG)
 	})
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
@@ -109,7 +152,7 @@ func main() {
 		_, _ = w.Write(pageHTML)
 	})
 
-	http.HandleFunc("/api/ports", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/ports", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -137,36 +180,81 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string][]string{"ports": ports})
 	})
 
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleUARTWebSocket(w, r)
 	})
 
-	logger.Infof(logTag, "Open http://%s — set port/baud on the page and click Connect.", webUIListen)
-
-	// Register with AppHub portal (proxy mode — WebSocket is tunnelled by the portal).
+	// Connect to Orbit OS to register the page with the Launcher. Without it
+	// (for example when developing with no device) the page is still served
+	// on this computer only.
 	client, err := orbitos.NewClientAuto(gravityHost)
 	if err != nil {
-		logger.Warnf(logTag, "Gravity client: %v — AppHub registration skipped", err)
+		logger.Warnf(logTag, "Orbit OS client: %v — the page will not be registered with the Launcher", err)
+		client = nil
 	} else {
 		defer client.Close()
-		if client.AppHubManager != nil {
-			go func() {
-				if err := client.AppHubManager.RegisterService(&apphubv26.RegisterServiceRequest{
-					Host:   "127.0.0.1",
-					Port:   9002,
-					Routes: []*apphubv26.Route{{Path: "/console"}},
-					Health: &apphubv26.HealthCheck{Type: apphubv26.HealthCheckType_HEALTH_CHECK_TCP},
-				}); err != nil {
-					logger.Warnf(logTag, "AppHub RegisterService: %v", err)
-				}
-			}()
-		}
 	}
 
-	if err := http.ListenAndServe(webUIListen, nil); err != nil {
-		logger.Fatalf(logTag, "ListenAndServe: %v", err)
-		os.Exit(1)
+	listener, registered, err := listenAndRegister(client)
+	if err != nil {
+		return err
 	}
+	if registered {
+		logger.Infof(logTag, "Listening on %s, registered with the Launcher at %s", listener.Addr(), route)
+		// Remove the page from the Launcher when the app stops.
+		defer func() {
+			if err := client.AppHubManager.UnregisterService(); err != nil {
+				logger.Warnf(logTag, "UnregisterService: %v", err)
+			}
+		}()
+	} else {
+		logger.Infof(logTag, "Listening on http://%s (not registered with the Launcher)", listener.Addr())
+	}
+
+	server := &http.Server{Handler: mux}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(listener) }()
+
+	select {
+	case err := <-serveErr:
+		return fmt.Errorf("Serve: %w", err)
+	case <-ctx.Done():
+	}
+
+	// Give the requests in progress a moment to finish. Open consoles are
+	// closed: the UART port is released when the app exits.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("Shutdown: %w", err)
+	}
+	return nil
+}
+
+// listenAndRegister finds a free port in the reserved range, starting at
+// preferredPort, and registers the page with the Launcher (proxy mode: the
+// Launcher forwards the page and the WebSocket). With no client it only listens.
+func listenAndRegister(client *orbitos.Client) (listener net.Listener, registered bool, err error) {
+	span := portMax - portMin + 1
+	for i := 0; i < span; i++ {
+		port := portMin + (preferredPort-portMin+i)%span
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+		listener, err = net.Listen("tcp", addr)
+		if err != nil {
+			continue // port taken: try the next one
+		}
+		if client == nil || client.AppHubManager == nil {
+			return listener, false, nil
+		}
+		if err := client.AppHubManager.RegisterWebUI(addr, route); err != nil {
+			listener.Close() // the Launcher refused this port: try the next one
+			logger.Warnf(logTag, "RegisterWebUI %s: %v", addr, err)
+			continue
+		}
+		return listener, true, nil
+	}
+	return nil, false, fmt.Errorf("no free web interface port in %d-%d", portMin, portMax)
 }
 
 // uartOpenMsg is the first WebSocket message (JSON): port/baud/gravity config.

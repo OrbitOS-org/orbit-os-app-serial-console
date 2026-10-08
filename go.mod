@@ -15,3 +15,5 @@ require (
 	google.golang.org/grpc v1.77.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )
+
+replace github.com/OrbitOS-org/orbit-os-sdk-go/v26 => ./orbit-os-sdk-go
